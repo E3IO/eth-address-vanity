@@ -903,6 +903,14 @@ int main(int argc, char *argv[]) {
 
 
 
+    int cuda_device_count = 0;
+    cudaError_t ce = cudaGetDeviceCount(&cuda_device_count);
+    if (ce != cudaSuccess) {
+        printf("CUDA error (cudaGetDeviceCount): %s\n", cudaGetErrorString(ce));
+        return 1;
+    }
+
+
     for (int i = 0; i < num_devices; i++) {
         cudaError_t e = cudaSetDevice(device_ids[i]);
         if (e != cudaSuccess) {
@@ -911,11 +919,22 @@ int main(int argc, char *argv[]) {
             return 1;
         }
 
+        // Force CUDA runtime initialization on this device.
+        e = cudaFree(0);
+        if (e != cudaSuccess) {
+            printf("CUDA error (cudaFree(0)) on device %d: %s\n", device_ids[i], cudaGetErrorString(e));
+            return 1;
+        }
+
         // Copy prefix/suffix constants AFTER a CUDA context exists for this device.
-        cudaMemcpyToSymbol(device_prefix, prefix_tmp, 64, 0, cudaMemcpyHostToDevice);
-        cudaMemcpyToSymbol(device_suffix, suffix_tmp, 64, 0, cudaMemcpyHostToDevice);
-        cudaMemcpyToSymbol(device_prefix_len_const, &prefix_len_host, sizeof(int), 0, cudaMemcpyHostToDevice);
-        cudaMemcpyToSymbol(device_suffix_len_const, &suffix_len_host, sizeof(int), 0, cudaMemcpyHostToDevice);
+        e = cudaMemcpyToSymbol(device_prefix, prefix_tmp, 64, 0, cudaMemcpyHostToDevice);
+        if (e != cudaSuccess) { printf("CUDA error (cudaMemcpyToSymbol device_prefix) on device %d: %s\n", device_ids[i], cudaGetErrorString(e)); return 1; }
+        e = cudaMemcpyToSymbol(device_suffix, suffix_tmp, 64, 0, cudaMemcpyHostToDevice);
+        if (e != cudaSuccess) { printf("CUDA error (cudaMemcpyToSymbol device_suffix) on device %d: %s\n", device_ids[i], cudaGetErrorString(e)); return 1; }
+        e = cudaMemcpyToSymbol(device_prefix_len_const, &prefix_len_host, sizeof(int), 0, cudaMemcpyHostToDevice);
+        if (e != cudaSuccess) { printf("CUDA error (cudaMemcpyToSymbol prefix_len) on device %d: %s\n", device_ids[i], cudaGetErrorString(e)); return 1; }
+        e = cudaMemcpyToSymbol(device_suffix_len_const, &suffix_len_host, sizeof(int), 0, cudaMemcpyHostToDevice);
+        if (e != cudaSuccess) { printf("CUDA error (cudaMemcpyToSymbol suffix_len) on device %d: %s\n", device_ids[i], cudaGetErrorString(e)); return 1; }
     }
 
     #define nothex(n) ((n < 48 || n > 57) && (n < 65 || n > 70) && (n < 97 || n > 102))
