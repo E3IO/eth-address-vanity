@@ -29,8 +29,10 @@
 #include <chrono>
 #include <fstream>
 #include <vector>
+#include <cstdlib>
 #include <ctype.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "secure_rand.h"
 #include "structures.h"
@@ -228,6 +230,8 @@ __device__ void handle_output2(int score_method, Address a, uint64_t key) {
 int global_max_score = 0;
 std::mutex global_max_score_mutex;
 uint32_t GRID_SIZE = 1U << 15;
+bool global_pubkey_mode = false;
+CurvePoint global_base_pubkey = G;
 
 struct Message {
     uint64_t time;
@@ -264,7 +268,69 @@ uint64_t milliseconds() {
 }
 
 
-void host_thread(int device, int device_index, int score_method, int mode, Address origin_address, Address deployer_address, _uint256 bytecode) {
+_uint256 u64_to_uint256(uint64_t v) {
+    return _uint256{0, 0, 0, 0, 0, 0, (uint32_t)(v >> 32), (uint32_t)(v & 0xFFFFFFFF)};
+}
+
+bool parse_hex_nibble(char c, uint8_t& out) {
+    if (c >= '0' && c <= '9') { out = c - '0'; return true; }
+    if (c >= 'a' && c <= 'f') { out = 10 + (c - 'a'); return true; }
+    if (c >= 'A' && c <= 'F') { out = 10 + (c - 'A'); return true; }
+    return false;
+}
+
+bool parse_hex_to_uint256(const char* hex, _uint256& out) {
+    // Expect 64 hex chars (32 bytes). Supports optional 0x prefix.
+    int len = strlen(hex);
+    int idx = 0;
+    if (len >= 2 && hex[0] == '0' && (hex[1] == 'x' || hex[1] == 'X')) {
+        hex += 2;
+        len -= 2;
+    }
+    if (len != 64) return false;
+    uint8_t bytes[32];
+    for (int i = 0; i < 32; i++) {
+        uint8_t hi, lo;
+        if (!parse_hex_nibble(hex[idx++], hi)) return false;
+        if (!parse_hex_nibble(hex[idx++], lo)) return false;
+        bytes[i] = (hi << 4) | lo;
+    }
+    out.a = (bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3];
+    out.b = (bytes[4] << 24) | (bytes[5] << 16) | (bytes[6] << 8) | bytes[7];
+    out.c = (bytes[8] << 24) | (bytes[9] << 16) | (bytes[10] << 8) | bytes[11];
+    out.d = (bytes[12] << 24) | (bytes[13] << 16) | (bytes[14] << 8) | bytes[15];
+    out.e = (bytes[16] << 24) | (bytes[17] << 16) | (bytes[18] << 8) | bytes[19];
+    out.f = (bytes[20] << 24) | (bytes[21] << 16) | (bytes[22] << 8) | bytes[23];
+    out.g = (bytes[24] << 24) | (bytes[25] << 16) | (bytes[26] << 8) | bytes[27];
+    out.h = (bytes[28] << 24) | (bytes[29] << 16) | (bytes[30] << 8) | bytes[31];
+    return true;
+}
+
+bool parse_hex_pubkey(const char* hex, CurvePoint& out) {
+    // Accept uncompressed hex (130 chars with 04 prefix or 128 without).
+    int len = strlen(hex);
+    const char* p = hex;
+    if (len >= 2 && p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) {
+        p += 2;
+        len -= 2;
+    }
+    if (len == 130 && (p[0] == '0' || p[0] == '4')) {
+        // Skip optional 0/4 prefix byte
+        p += 2;
+        len -= 2;
+    }
+    if (len != 128) return false;
+    char x_hex[65]; char y_hex[65];
+    memcpy(x_hex, p, 64); x_hex[64] = '\0';
+    memcpy(y_hex, p + 64, 64); y_hex[64] = '\0';
+    _uint256 x, y;
+    if (!parse_hex_to_uint256(x_hex, x)) return false;
+    if (!parse_hex_to_uint256(y_hex, y)) return false;
+    out = CurvePoint{x, y};
+    return true;
+}
+
+void host_thread(int device, int device_index, int score_method, int mode, Address origin_address, Address deployer_address, _uint256 bytecode, bool pubkey_mode, CurvePoint base_pubkey, uint64_t offset_start) {
     uint64_t GRID_WORK = ((uint64_t)BLOCK_SIZE * (uint64_t)GRID_SIZE * (uint64_t)THREAD_WORK);
 
     CurvePoint* block_offsets = 0;
@@ -314,13 +380,21 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
     _uint256 base_random_key{0, 0, 0, 0, 0, 0, 0, 0};
     _uint256 random_key_increment{0, 0, 0, 0, 0, 0, 0, 0};
     int status;
-    if (mode == 0 || mode == 1) {
-        status = generate_secure_random_key(base_random_key, max_key, 255);
+    if (pubkey_mode) {
+        base_random_key = u64_to_uint256(offset_start);
         random_key_increment = cpu_mul_256_mod_p(cpu_mul_256_mod_p(uint32_to_uint256(BLOCK_SIZE), uint32_to_uint256(GRID_SIZE)), uint32_to_uint256(THREAD_WORK));
-    } else if (mode == 2 || mode == 3) {
-        status = generate_secure_random_key(base_random_key, max_key, 256);
-        random_key_increment = cpu_mul_256_mod_p(cpu_mul_256_mod_p(uint32_to_uint256(BLOCK_SIZE), uint32_to_uint256(GRID_SIZE)), uint32_to_uint256(THREAD_WORK));
+        random_key_increment.h &= ~(THREAD_WORK - 1);
         base_random_key.h &= ~(THREAD_WORK - 1);
+        status = 0;
+    } else {
+        if (mode == 0 || mode == 1) {
+            status = generate_secure_random_key(base_random_key, max_key, 255);
+            random_key_increment = cpu_mul_256_mod_p(cpu_mul_256_mod_p(uint32_to_uint256(BLOCK_SIZE), uint32_to_uint256(GRID_SIZE)), uint32_to_uint256(THREAD_WORK));
+        } else if (mode == 2 || mode == 3) {
+            status = generate_secure_random_key(base_random_key, max_key, 256);
+            random_key_increment = cpu_mul_256_mod_p(cpu_mul_256_mod_p(uint32_to_uint256(BLOCK_SIZE), uint32_to_uint256(GRID_SIZE)), uint32_to_uint256(THREAD_WORK));
+            base_random_key.h &= ~(THREAD_WORK - 1);
+        }
     }
 
     if (status) {
@@ -343,7 +417,13 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
 
         CurvePoint* block_offsets_host = new CurvePoint[GRID_SIZE];
         CurvePoint block_offset = cpu_point_multiply(G, _uint256{0, 0, 0, 0, 0, 0, 0, THREAD_WORK * BLOCK_SIZE});
-        p = G;
+        if (pubkey_mode) {
+            _uint256 base_delta = u64_to_uint256(offset_start);
+            CurvePoint start = cpu_point_add(base_pubkey, cpu_point_multiply(G, base_delta));
+            p = start;
+        } else {
+            p = G;
+        }
         for (int i = 0; i < GRID_SIZE; i++) {
             block_offsets_host[i] = p;
             p = cpu_point_add(p, block_offset);
@@ -375,12 +455,18 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
             if (!first_iteration) {
                 previous_random_key = random_key;
                 random_key = cpu_add_256(random_key, random_key_increment);
-                if (gte_256(random_key, max_key)) {
+                if (!pubkey_mode && gte_256(random_key, max_key)) {
                     random_key = cpu_sub_256(random_key, max_key);
                 }
             }
             CurvePoint thread_offset = cpu_point_multiply(G, _uint256{0, 0, 0, 0, 0, 0, 0, THREAD_WORK});
-            CurvePoint p = cpu_point_multiply(G, cpu_add_256(_uint256{0, 0, 0, 0, 0, 0, 0, THREAD_WORK - 1}, random_key));
+            _uint256 thread_base_scalar = cpu_add_256(_uint256{0, 0, 0, 0, 0, 0, 0, THREAD_WORK - 1}, random_key);
+            CurvePoint p;
+            if (pubkey_mode) {
+                p = cpu_point_add(base_pubkey, cpu_point_multiply(G, thread_base_scalar));
+            } else {
+                p = cpu_point_multiply(G, thread_base_scalar);
+            }
             for (int i = 0; i < BLOCK_SIZE; i++) {
                 thread_offsets_host[i] = p;
                 p = cpu_point_add(p, thread_offset);
@@ -623,6 +709,8 @@ int main(int argc, char *argv[]) {
     char* input_deployer_address = 0;
     char* input_prefix = 0;
     char* input_suffix = 0;
+    char* input_pubkey = 0;
+    uint64_t offset_start = 0;
 
     int num_devices = 0;
     int device_ids[10];
@@ -672,6 +760,12 @@ int main(int argc, char *argv[]) {
                 *p = tolower(*p);
             }
             i += 2;
+        } else if (strcmp(argv[i], "--pubkey") == 0 || strcmp(argv[i], "-pk") == 0) {
+            input_pubkey = argv[i + 1];
+            i += 2;
+        } else if (strcmp(argv[i], "--offset-start") == 0 || strcmp(argv[i], "-os") == 0) {
+            offset_start = strtoull(argv[i + 1], nullptr, 0);
+            i += 2;
         } else {
             i++;
         }
@@ -693,6 +787,20 @@ int main(int argc, char *argv[]) {
 
     if (score_method == -1) {
         printf("Scoring method was not specified. Defaulting to 2. Mode: %d\n", mode);
+    }
+
+    if (input_pubkey && mode != 0) {
+        printf("Pubkey-offset 模式目前仅支持普通地址搜索（mode 0）。\n");
+        return 1;
+    }
+
+    bool pubkey_mode = input_pubkey != nullptr;
+    CurvePoint base_pubkey = G;
+    if (pubkey_mode) {
+        if (!parse_hex_pubkey(input_pubkey, base_pubkey)) {
+            printf("无效公钥：需要未压缩公钥 128/130 hex（可带0x/04前缀）。\n");
+            return 1;
+        }
     }
 
     if (mode == 2 && !input_file) {
@@ -864,7 +972,7 @@ int main(int argc, char *argv[]) {
     std::vector<std::thread> threads;
     uint64_t global_start_time = milliseconds();
     for (int i = 0; i < num_devices; i++) {
-        std::thread th(host_thread, device_ids[i], i, score_method, mode, origin_address, deployer_address, bytecode_hash);
+        std::thread th(host_thread, device_ids[i], i, score_method, mode, origin_address, deployer_address, bytecode_hash, pubkey_mode, base_pubkey, offset_start);
         threads.push_back(move(th));
     }
 
@@ -892,8 +1000,13 @@ int main(int argc, char *argv[]) {
                         for (int i = 0; i < m.results_count; i++) {
 
                             if (mode == 0) {
-                                CurvePoint p = cpu_point_multiply(G, m.results[i]);
-                                addresses[i] = cpu_calculate_address(p.x, p.y);
+                                if (pubkey_mode) {
+                                    CurvePoint p = cpu_point_add(base_pubkey, cpu_point_multiply(G, m.results[i]));
+                                    addresses[i] = cpu_calculate_address(p.x, p.y);
+                                } else {
+                                    CurvePoint p = cpu_point_multiply(G, m.results[i]);
+                                    addresses[i] = cpu_calculate_address(p.x, p.y);
+                                }
                             } else if (mode == 1) {
                                 CurvePoint p = cpu_point_multiply(G, m.results[i]);
                                 addresses[i] = cpu_calculate_contract_address(cpu_calculate_address(p.x, p.y));
@@ -913,7 +1026,13 @@ int main(int argc, char *argv[]) {
                             Address a = addresses[i];
                             uint64_t time = (m.time - global_start_time) / 1000;
 
-                            if (mode == 0 || mode == 1) {
+                            if (mode == 0) {
+                                if (pubkey_mode) {
+                                    printf("Elapsed: %06u Score: %02u Offset: 0x%08x%08x%08x%08x%08x%08x%08x%08x Address: 0x%08x%08x%08x%08x%08x\n", (uint32_t)time, score, k.a, k.b, k.c, k.d, k.e, k.f, k.g, k.h, a.a, a.b, a.c, a.d, a.e);
+                                } else {
+                                    printf("Elapsed: %06u Score: %02u Private Key: 0x%08x%08x%08x%08x%08x%08x%08x%08x Address: 0x%08x%08x%08x%08x%08x\n", (uint32_t)time, score, k.a, k.b, k.c, k.d, k.e, k.f, k.g, k.h, a.a, a.b, a.c, a.d, a.e);
+                                }
+                            } else if (mode == 1) {
                                 printf("Elapsed: %06u Score: %02u Private Key: 0x%08x%08x%08x%08x%08x%08x%08x%08x Address: 0x%08x%08x%08x%08x%08x\n", (uint32_t)time, score, k.a, k.b, k.c, k.d, k.e, k.f, k.g, k.h, a.a, a.b, a.c, a.d, a.e);
                             } else if (mode == 2 || mode == 3) {
                                 printf("Elapsed: %06u Score: %02u Salt: 0x%08x%08x%08x%08x%08x%08x%08x%08x Address: 0x%08x%08x%08x%08x%08x\n", (uint32_t)time, score, k.a, k.b, k.c, k.d, k.e, k.f, k.g, k.h, a.a, a.b, a.c, a.d, a.e);
