@@ -150,18 +150,17 @@ __device__ int score_prefix_suffix(Address a, const char* prefix, int prefix_len
 // Prefix/suffix for address matching (copied to device constant memory)
 __constant__ char device_prefix[64];
 __constant__ char device_suffix[64];
+__constant__ int device_prefix_len_const;
+__constant__ int device_suffix_len_const;
 
 __device__ void handle_output(int score_method, Address a, uint64_t key, bool inv) {
     int score = 0;
     if (score_method == 0) { score = score_leading_zeros(a); }
     else if (score_method == 1) { score = score_zero_bytes(a); }
     else if (score_method == 2) {
-        // printf("Brute-forcing for Prefix & Suffix");
-        // Use device_prefix/device_suffix and their actual lengths
-        int prefix_len = 0;
-        int suffix_len = 0;
-        while (prefix_len < 64 && device_prefix[prefix_len] != '\0') prefix_len++;
-        while (suffix_len < 64 && device_suffix[suffix_len] != '\0') suffix_len++;
+        // Use device_prefix/device_suffix and their lengths (pre-copied)
+        int prefix_len = device_prefix_len_const;
+        int suffix_len = device_suffix_len_const;
         score = score_prefix_suffix(a, device_prefix, prefix_len, device_suffix, suffix_len);
         // Only push if score > 0
         if (score > 0) {
@@ -193,10 +192,8 @@ __device__ void handle_output2(int score_method, Address a, uint64_t key) {
     if (score_method == 0) { score = score_leading_zeros(a); }
     else if (score_method == 1) { score = score_zero_bytes(a); }
     else if (score_method == 2) {
-        int prefix_len = 0;
-        int suffix_len = 0;
-        while (prefix_len < 64 && device_prefix[prefix_len] != '\0') prefix_len++;
-        while (suffix_len < 64 && device_suffix[suffix_len] != '\0') suffix_len++;
+        int prefix_len = device_prefix_len_const;
+        int suffix_len = device_suffix_len_const;
         score = score_prefix_suffix(a, device_prefix, prefix_len, device_suffix, suffix_len);
         // Only push if score > 0
         if (score > 0) {
@@ -833,16 +830,22 @@ int main(int argc, char *argv[]) {
     // Copy prefix/suffix to device constant memory if set, otherwise set to empty string
     char prefix_tmp[64] = {0};
     char suffix_tmp[64] = {0};
+    int prefix_len_host = 0;
+    int suffix_len_host = 0;
     if (input_prefix && strlen(input_prefix) > 0) {
         strncpy(prefix_tmp, input_prefix, 63);
         prefix_tmp[63] = '\0';
+        prefix_len_host = (int)strlen(prefix_tmp);
     }
     if (input_suffix && strlen(input_suffix) > 0) {
         strncpy(suffix_tmp, input_suffix, 63);
         suffix_tmp[63] = '\0';
+        suffix_len_host = (int)strlen(suffix_tmp);
     }
     cudaMemcpyToSymbol(device_prefix, prefix_tmp, 64, 0, cudaMemcpyHostToDevice);
     cudaMemcpyToSymbol(device_suffix, suffix_tmp, 64, 0, cudaMemcpyHostToDevice);
+    cudaMemcpyToSymbol(device_prefix_len_const, &prefix_len_host, sizeof(int), 0, cudaMemcpyHostToDevice);
+    cudaMemcpyToSymbol(device_suffix_len_const, &suffix_len_host, sizeof(int), 0, cudaMemcpyHostToDevice);
 
     // Debug print the chosen score_method after all logic is finalized
     printf("[DEBUG] Score method selected: %d\n", score_method);
