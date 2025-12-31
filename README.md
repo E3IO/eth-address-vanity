@@ -1,57 +1,74 @@
-# Vanity Eth Address
-Vanity Eth Address is a tool to generate Ethereum addresses that match certain criteria, accelerated with NVIDIA CUDA-enabled GPUs.
+# Ethereum Vanity Address (CUDA)
 
-This project is a CUDA-accelerated Ethereum vanity address generator written in C++. It utilizes NVIDIA GPUs to brute-force Ethereum addresses that match user-defined patterns, including both prefixes and suffixes. Designed for high performance, the tool can test billions of candidate keys per second, making it practical to generate customized Ethereum addresses that would be computationally expensive to obtain with CPU-only methods.
+CUDA 加速的以太坊靓号生成器，支持前缀/后缀匹配、合约/CREATE2/CREATE3 模式，以及“公钥+偏移”云 GPU 搜索模式（公私钥分离）。
 
-## Compilation
+## 功能
+- 普通地址/合约地址/CREATE2/CREATE3 靓号搜索
+- 评分方式：前导零字节、全局零字节、前缀/后缀匹配
+- 多 GPU 支持（重复传入 `--device`）
+- 公钥 + 偏移搜索：可信环境生成种子并保管私钥，仅把公钥发给云端暴力偏移
 
-Set required PATH:
-```
-set path=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\HostX86\x86;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\VC\VCPackages;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\TestWindow;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\bin\Roslyn;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Team Tools\DiagnosticsHub\Collector;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\Extensions\Microsoft\CodeCoverage.Console;C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\\x86;C:\Program Files (x86)\Windows Kits\10\bin\\x86;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\\MSBuild\Current\Bin\amd64;C:\Windows\Microsoft.NET\Framework\v4.0.30319;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\;%path%
+## 环境与编译
+- 需要 NVIDIA GPU（Compute Capability ≥ 5.2）与 CUDA Toolkit。
+- Linux 编译示例（4090 推荐架构 sm_89，可按需调整）：
+```bash
+export PATH=/usr/local/cuda/bin:$PATH
+export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
 
-set path=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx86\x64;%path%
-```
-
-Compile with (on Windows):
-
-```
-nvcc src/main.cu -o eth-vanity-address.exe -std=c++17 -O3 -D_WIN64 -lbcrypt
-```
-
-## Usage
-```
-./eth-vanity-addresss [PARAMETERS]
-    Scoring methods
-      (-lz) --leading-zeros               Count zero bytes at the start of the address
-       (-z) --zeros                       Count zero bytes anywhere in the address
-    Modes (normal addresses by default)
-       (-c) --contract                    Search for addresses and score the contract address generated using nonce=0
-      (-c2) --contract2                   Search for contract addresses using the CREATE2 opcode
-      (-c3) --contract3                   Search for contract addresses using a CREATE3 proxy deployer
-    Other:
-       (-d) --device <device_number>      Use device <device_number> (Add one for each device for multi-gpu)
-       (-b) --bytecode <filename>         File containing contract bytecode (only needed when using --contract2 or --contract3)
-       (-a) --address <address>           Sender contract address (only needed when using --contract2 or --contract3)
-      (-ad) --deployer-address <address>  Deployer contract address (only needed when using --contract3)
-       (-p) --prefix <hex>                Require address to start with <hex>
-       (-s) --suffix <hex>                Require address to end with <hex>
-       (-w) --work-scale <num>            Defaults to 15. Scales the work done in each kernel. If your GPU finishes kernels within a few seconds, you may benefit from increasing this number.
-
-Examples:
-    eth-vanity-address --zeros --device 0 --device 2 --work-scale 17
-    eth-vanity-address --leading-zeros --contract2 --bytecode bytecode.txt --address 0x0000000000000000000000000000000000000000 --device 0
-    eth-vanity-address --device 0 --prefix 51fA --suffix 38E115
+nvcc src/main.cu -o eth-vanity-address -std=c++17 -O3 -Xcompiler -pthread -arch=sm_89 --use_fast_math
 ```
 
-## Benchmarks
-| GPU  | Normal addresses | Contract addresses | CREATE2 addresses |
-| ---- | ---------------- | ------------------ | ----------------- |
-| 4090 | 3800M/s          | 2050M/s            | 4800M/s           |
-| 3090 | 1600M/s          | 850M/s             | 2300M/s           |
-| 3070 | 1000M/s          | 550M/s             | 1300M/s           |
+## 运行用法
+```bash
+./eth-vanity-address [评分/模式] [设备] [前后缀/公钥等参数] [其他选项]
+```
 
-Note that configuration and environment can affect performance.
+### 核心参数
+- 设备：`--device <id>`（可重复，多卡）
+- 评分方式（互斥）：`--leading-zeros|-lz`、`--zeros|-z`、（前缀/后缀自动启用）
+- 前缀/后缀：`--prefix|-p <hex>`，`--suffix|-s <hex>`（40 位地址 hex，建议小写；最多 63 字符）
+- 工作规模：`--work-scale|-w <n>`（默认 15，GPU 核心越强可尝试 16/17/18）
 
-## Requirements
-* Visual Studio Build Tools 2022
-* A NVIDIA CUDA-enabled GPU with a compute capability of at least 5.2 (Roughly anything above a GeForce GTX 950. For a full list [see here](https://developer.nvidia.com/cuda-gpus)).
+### 模式选择
+- 普通地址（默认）
+- 合约：`--contract|-c`
+- CREATE2：`--contract2|-c2`，需 `--bytecode <file>`、`--address <40/42 hex>`
+- CREATE3：`--contract3|-c3`，需 `--bytecode <file>`、`--address <origin>`、`--deployer-address <addr>`
+
+### 公钥 + 偏移模式（云 GPU 安全搜索）
+- 参数：`--pubkey|-pk <uncompressed hex>`（128/130 字符，可带 0x/04），`--offset-start|-os <uint64>` 起始偏移
+- 仅支持普通地址模式（mode 0）
+- 云端输出 Offset 与地址，不输出私钥；可信端用 `priv = seed + offset (mod n)` 还原
+
+### 示例
+- 单卡前缀+后缀：
+```bash
+./eth-vanity-address --device 0 --prefix abcd --suffix 1234 --work-scale 17
+```
+- 多卡：
+```bash
+./eth-vanity-address --device 0 --device 1 --zeros --work-scale 16
+```
+- CREATE2：
+```bash
+./eth-vanity-address --device 0 --contract2 --bytecode bytecode.txt \
+  --address 0x0000000000000000000000000000000000000000 \
+  --prefix dead --work-scale 17
+```
+- 公钥+偏移（云）：
+```bash
+./eth-vanity-address --device 0 \
+  --pubkey 04<64B_X><64B_Y> \
+  --offset-start 0 \
+  --prefix cafe --suffix 0bad --work-scale 17
+```
+
+## 安全提示
+- 私钥生成使用系统 CSPRNG（Linux `/dev/urandom`，Windows BCrypt），含曲线阶拒绝采样；务必在可信环境运行。
+- 公钥+偏移模式：种子/私钥仅在可信端；云端只接触公钥与偏移，不输出私钥。
+- 关闭或谨慎处理日志，避免泄露前缀/后缀目标或偏移。
+- 云部署建议使用专属裸金属或 TEE，避免快照/内存被窃取；如需持久化结果请加密。
+
+## 已知建议
+- work-scale 过大可能增显存与单 kernel 时长，可根据 GPU 调整。
+- 建议显式设置 `-arch` 与 `--use_fast_math`（视需求而定）。
