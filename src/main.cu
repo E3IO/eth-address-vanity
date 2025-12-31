@@ -354,7 +354,7 @@ bool parse_hex_pubkey(const char* hex, CurvePoint& out) {
     return true;
 }
 
-void host_thread(int device, int device_index, int score_method, int mode, Address origin_address, Address deployer_address, _uint256 bytecode, bool pubkey_mode, CurvePoint base_pubkey, uint64_t offset_start) {
+void host_thread(int device, int device_index, int score_method, int mode, Address origin_address, Address deployer_address, _uint256 bytecode, bool pubkey_mode, CurvePoint base_pubkey, _uint256 offset_start_scalar) {
     uint64_t GRID_WORK = ((uint64_t)BLOCK_SIZE * (uint64_t)GRID_SIZE * (uint64_t)THREAD_WORK);
 
     CurvePoint* block_offsets = 0;
@@ -443,8 +443,7 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
         CurvePoint block_offset = cpu_point_multiply(G, _uint256{0, 0, 0, 0, 0, 0, 0, THREAD_WORK * BLOCK_SIZE});
         if (pubkey_mode) {
             // Apply base_pubkey and offset_start only here.
-            _uint256 base_delta = u64_to_uint256(offset_start);
-            CurvePoint start = cpu_point_add(base_pubkey, cpu_point_multiply(G, base_delta));
+            CurvePoint start = cpu_point_add(base_pubkey, cpu_point_multiply(G, offset_start_scalar));
             p = start;
         } else {
             p = G;
@@ -541,9 +540,8 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
                                 // Pubkey mode: k_offset already encodes the per-thread/per-addend index.
                                 // Report scalar offset relative to base_pubkey:
                                 // offset = offset_start + previous_random_key + k_offset
-                                _uint256 base = u64_to_uint256(offset_start);
                                 _uint256 inner = cpu_add_256(previous_random_key, u64_to_uint256(k_offset));
-                                k = cpu_add_256(base, inner);
+                                k = cpu_add_256(offset_start_scalar, inner);
                                 if (output_buffer3_host[i]) {
                                     k = cpu_sub_256(N, k);
                                 }
@@ -743,6 +741,7 @@ int main(int argc, char *argv[]) {
     char* input_prefix = 0;
     char* input_suffix = 0;
     char* input_pubkey = 0;
+    char* input_offset_start_hex = 0;
     uint64_t offset_start = 0;
 
     int num_devices = 0;
@@ -799,6 +798,9 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--offset-start") == 0 || strcmp(argv[i], "-os") == 0) {
             offset_start = strtoull(argv[i + 1], nullptr, 0);
             i += 2;
+        } else if (strcmp(argv[i], "--offset-start-hex") == 0 || strcmp(argv[i], "-osh") == 0) {
+            input_offset_start_hex = argv[i + 1];
+            i += 2;
         } else {
             i++;
         }
@@ -832,6 +834,14 @@ int main(int argc, char *argv[]) {
     if (pubkey_mode) {
         if (!parse_hex_pubkey(input_pubkey, base_pubkey)) {
             printf("无效公钥：需要未压缩公钥 128/130 hex（可带0x/04前缀）。\n");
+            return 1;
+        }
+    }
+
+    _uint256 offset_start_scalar = u64_to_uint256(offset_start);
+    if (input_offset_start_hex) {
+        if (!parse_hex_to_uint256(input_offset_start_hex, offset_start_scalar)) {
+            printf("无效 offset-start-hex：需要 0x 开头或纯 64 位 hex（256bit）。\n");
             return 1;
         }
     }
@@ -1027,7 +1037,7 @@ int main(int argc, char *argv[]) {
     std::vector<std::thread> threads;
     uint64_t global_start_time = milliseconds();
     for (int i = 0; i < num_devices; i++) {
-        std::thread th(host_thread, device_ids[i], i, score_method, mode, origin_address, deployer_address, bytecode_hash, pubkey_mode, base_pubkey, offset_start);
+        std::thread th(host_thread, device_ids[i], i, score_method, mode, origin_address, deployer_address, bytecode_hash, pubkey_mode, base_pubkey, offset_start_scalar);
         threads.push_back(move(th));
     }
 

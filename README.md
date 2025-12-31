@@ -37,6 +37,7 @@ nvcc src/main.cu -o eth-vanity-address -std=c++17 -O3 -Xcompiler -pthread -arch=
 
 ### 公钥 + 偏移模式（云 GPU 安全搜索）
 - 参数：`--pubkey|-pk <uncompressed hex>`（128/130 字符，可带 0x/04），`--offset-start|-os <uint64>` 起始偏移
+- 参数（推荐，256bit）：`--offset-start-hex|-osh 0x...`（64 字节 hex，可带 0x）起始偏移，适合超大区间分片
 - 仅支持普通地址模式（mode 0）
 - 云端输出 Offset 与地址，不输出私钥；可信端用 `priv = seed + offset (mod n)` 还原
 
