@@ -380,10 +380,10 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
     _uint256 random_key_increment{0, 0, 0, 0, 0, 0, 0, 0};
     int status;
     if (pubkey_mode) {
-        base_random_key = u64_to_uint256(offset_start);
+        // In pubkey mode, random_key represents only the delta offset (starting from 0).
+        // offset_start and base_pubkey are applied only via block_offsets to avoid being cancelled in gpu_address_init.
+        base_random_key = _uint256{0, 0, 0, 0, 0, 0, 0, 0};
         random_key_increment = cpu_mul_256_mod_p(cpu_mul_256_mod_p(uint32_to_uint256(BLOCK_SIZE), uint32_to_uint256(GRID_SIZE)), uint32_to_uint256(THREAD_WORK));
-        random_key_increment.h &= ~(THREAD_WORK - 1);
-        base_random_key.h &= ~(THREAD_WORK - 1);
         status = 0;
     } else {
         if (mode == 0 || mode == 1) {
@@ -417,6 +417,7 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
         CurvePoint* block_offsets_host = new CurvePoint[GRID_SIZE];
         CurvePoint block_offset = cpu_point_multiply(G, _uint256{0, 0, 0, 0, 0, 0, 0, THREAD_WORK * BLOCK_SIZE});
         if (pubkey_mode) {
+            // Apply base_pubkey and offset_start only here.
             _uint256 base_delta = u64_to_uint256(offset_start);
             CurvePoint start = cpu_point_add(base_pubkey, cpu_point_multiply(G, base_delta));
             p = start;
@@ -460,12 +461,8 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
             }
             CurvePoint thread_offset = cpu_point_multiply(G, _uint256{0, 0, 0, 0, 0, 0, 0, THREAD_WORK});
             _uint256 thread_base_scalar = cpu_add_256(_uint256{0, 0, 0, 0, 0, 0, 0, THREAD_WORK - 1}, random_key);
-            CurvePoint p;
-            if (pubkey_mode) {
-                p = cpu_point_add(base_pubkey, cpu_point_multiply(G, thread_base_scalar));
-            } else {
-                p = cpu_point_multiply(G, thread_base_scalar);
-            }
+            // IMPORTANT: thread_offsets must NOT include base_pubkey in pubkey mode, otherwise it cancels out in gpu_address_init.
+            CurvePoint p = cpu_point_multiply(G, thread_base_scalar);
             for (int i = 0; i < BLOCK_SIZE; i++) {
                 thread_offsets_host[i] = p;
                 p = cpu_point_add(p, thread_offset);
@@ -516,8 +513,11 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
                             uint64_t k_offset = output_buffer_host[i];
                             _uint256 k;
                             if (pubkey_mode) {
-                                // pubkey模式下，offset = base_offset(previous_random_key) + k_offset
-                                k = cpu_add_256(previous_random_key, u64_to_uint256(k_offset));
+                                // In pubkey mode, report the scalar offset relative to base_pubkey:
+                                // offset = offset_start + (previous_random_key + THREAD_WORK + k_offset)
+                                _uint256 base = u64_to_uint256(offset_start);
+                                _uint256 inner = cpu_add_256(previous_random_key, cpu_add_256(_uint256{0, 0, 0, 0, 0, 0, 0, THREAD_WORK}, u64_to_uint256(k_offset)));
+                                k = cpu_add_256(base, inner);
                                 if (output_buffer3_host[i]) {
                                     k = cpu_sub_256(N, k);
                                 }
