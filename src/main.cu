@@ -848,7 +848,11 @@ int main(int argc, char *argv[]) {
     cudaMemcpyToSymbol(device_suffix_len_const, &suffix_len_host, sizeof(int), 0, cudaMemcpyHostToDevice);
 
     // Debug print the chosen score_method after all logic is finalized
-    printf("[DEBUG] Score method selected: %d\n", score_method);
+    printf("[DEBUG] Score method selected: %d (prefix_len=%d, suffix_len=%d)\n", score_method, prefix_len_host, suffix_len_host);
+    if (score_method == 2 && prefix_len_host == 0 && suffix_len_host == 0) {
+        printf("ERROR: prefix/suffix scoring selected but both lengths are zero. Please set --prefix/--suffix correctly.\n");
+        return 1;
+    }
 
 
 
