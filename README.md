@@ -68,6 +68,7 @@ nvcc src/main.cu -o eth-vanity-address -std=c++17 -O3 -Xcompiler -pthread -arch=
 - 公钥+偏移模式：种子/私钥仅在可信端；云端只接触公钥与偏移，不输出私钥。
 - 关闭或谨慎处理日志，避免泄露前缀/后缀目标或偏移。
 - 云部署建议使用专属裸金属或 TEE，避免快照/内存被窃取；如需持久化结果请加密。
+- 启动日志会打印前/后缀长度（host/device），便于确认匹配条件是否正确传入 GPU。
 
 ## 已知建议
 - work-scale 过大可能增显存与单 kernel 时长，可根据 GPU 调整。
