@@ -48,8 +48,33 @@
 #define BLOCK_SIZE 256U
 #define THREAD_WORK (1U << 8)
 
+char host_prefix_str[64] = {0};
 char host_suffix_str[64] = {0};
+int host_prefix_len = 0;
 int host_suffix_len = 0;
+
+bool host_match_prefix_suffix(Address a) {
+    char hex[41];
+    uint32_t words[5] = {a.a, a.b, a.c, a.d, a.e};
+    for (int i = 0; i < 5; i++) {
+        uint32_t val = words[i];
+        for (int j = 0; j < 8; j++) {
+            int shift = 28 - j * 4;
+            int nibble = (val >> shift) & 0xF;
+            char c = (nibble < 10) ? ('0' + nibble) : ('a' + nibble - 10);
+            hex[i * 8 + j] = c;
+        }
+    }
+    hex[40] = '\0';
+
+    for (int i = 0; i < host_prefix_len; i++) {
+        if (hex[i] != host_prefix_str[i]) return false;
+    }
+    for (int i = 0; i < host_suffix_len; i++) {
+        if (hex[40 - host_suffix_len + i] != host_suffix_str[i]) return false;
+    }
+    return true;
+}
 
 __constant__ CurvePoint thread_offsets[BLOCK_SIZE];
 __constant__ CurvePoint addends[THREAD_WORK - 1];
@@ -513,10 +538,11 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
                             uint64_t k_offset = output_buffer_host[i];
                             _uint256 k;
                             if (pubkey_mode) {
-                                // In pubkey mode, report the scalar offset relative to base_pubkey:
-                                // offset = offset_start + (previous_random_key + THREAD_WORK + k_offset)
+                                // Pubkey mode: k_offset already encodes the per-thread/per-addend index.
+                                // Report scalar offset relative to base_pubkey:
+                                // offset = offset_start + previous_random_key + k_offset
                                 _uint256 base = u64_to_uint256(offset_start);
-                                _uint256 inner = cpu_add_256(previous_random_key, cpu_add_256(_uint256{0, 0, 0, 0, 0, 0, 0, THREAD_WORK}, u64_to_uint256(k_offset)));
+                                _uint256 inner = cpu_add_256(previous_random_key, u64_to_uint256(k_offset));
                                 k = cpu_add_256(base, inner);
                                 if (output_buffer3_host[i]) {
                                     k = cpu_sub_256(N, k);
@@ -857,6 +883,12 @@ int main(int argc, char *argv[]) {
     cudaMemcpyToSymbol(device_prefix_len_const, &prefix_len_host, sizeof(int), 0, cudaMemcpyHostToDevice);
     cudaMemcpyToSymbol(device_suffix_len_const, &suffix_len_host, sizeof(int), 0, cudaMemcpyHostToDevice);
 
+    // Save for host-side verification (main thread printing)
+    memcpy(host_prefix_str, prefix_tmp, 64);
+    memcpy(host_suffix_str, suffix_tmp, 64);
+    host_prefix_len = prefix_len_host;
+    host_suffix_len = suffix_len_host;
+
     // Debug verify lengths copied to device
     int prefix_len_dev = -1;
     int suffix_len_dev = -1;
@@ -1051,6 +1083,9 @@ int main(int argc, char *argv[]) {
 
                             if (mode == 0) {
                                 if (pubkey_mode) {
+                                    if (!host_match_prefix_suffix(a)) {
+                                        continue;
+                                    }
                                     printf("Elapsed: %06u Score: %02u Offset: 0x%08x%08x%08x%08x%08x%08x%08x%08x Address: 0x%08x%08x%08x%08x%08x\n", (uint32_t)time, score, k.a, k.b, k.c, k.d, k.e, k.f, k.g, k.h, a.a, a.b, a.c, a.d, a.e);
                                 } else {
                                     printf("Elapsed: %06u Score: %02u Private Key: 0x%08x%08x%08x%08x%08x%08x%08x%08x Address: 0x%08x%08x%08x%08x%08x\n", (uint32_t)time, score, k.a, k.b, k.c, k.d, k.e, k.f, k.g, k.h, a.a, a.b, a.c, a.d, a.e);
