@@ -30,6 +30,7 @@
 #include <fstream>
 #include <vector>
 #include <cstdlib>
+#include <unordered_set>
 #include <ctype.h>
 #include <stdio.h>
 #include <string.h>
@@ -47,7 +48,8 @@
 #define BLOCK_SIZE 256U
 #define THREAD_WORK (1U << 8)
 
-
+char host_suffix_str[64] = {0};
+int host_suffix_len = 0;
 
 __constant__ CurvePoint thread_offsets[BLOCK_SIZE];
 __constant__ CurvePoint addends[THREAD_WORK - 1];
@@ -512,10 +514,18 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
                             if (output_buffer2_host[i] < max_score_host[0]) { continue; }
 
                             uint64_t k_offset = output_buffer_host[i];
-                            _uint256 k = cpu_add_256(previous_random_key, cpu_add_256(_uint256{0, 0, 0, 0, 0, 0, 0, THREAD_WORK}, _uint256{0, 0, 0, 0, 0, 0, (uint32_t)(k_offset >> 32), (uint32_t)(k_offset & 0xFFFFFFFF)}));
-
-                            if (output_buffer3_host[i]) {
-                                k = cpu_sub_256(N, k);
+                            _uint256 k;
+                            if (pubkey_mode) {
+                                // pubkey模式下，offset = base_offset(previous_random_key) + k_offset
+                                k = cpu_add_256(previous_random_key, u64_to_uint256(k_offset));
+                                if (output_buffer3_host[i]) {
+                                    k = cpu_sub_256(N, k);
+                                }
+                            } else {
+                                k = cpu_add_256(previous_random_key, cpu_add_256(_uint256{0, 0, 0, 0, 0, 0, 0, THREAD_WORK}, _uint256{0, 0, 0, 0, 0, 0, (uint32_t)(k_offset >> 32), (uint32_t)(k_offset & 0xFFFFFFFF)}));
+                                if (output_buffer3_host[i]) {
+                                    k = cpu_sub_256(N, k);
+                                }
                             }
                 
                             int idx = valid_results++;
