@@ -370,6 +370,12 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
 
     gpu_assert(cudaSetDevice(device));
 
+    // Copy prefix/suffix constants after CUDA context exists on this device.
+    gpu_assert(cudaMemcpyToSymbol(device_prefix, host_prefix_str, 64, 0, cudaMemcpyHostToDevice))
+    gpu_assert(cudaMemcpyToSymbol(device_suffix, host_suffix_str, 64, 0, cudaMemcpyHostToDevice))
+    gpu_assert(cudaMemcpyToSymbol(device_prefix_len_const, &host_prefix_len, sizeof(int), 0, cudaMemcpyHostToDevice))
+    gpu_assert(cudaMemcpyToSymbol(device_suffix_len_const, &host_suffix_len, sizeof(int), 0, cudaMemcpyHostToDevice))
+
     gpu_assert(cudaHostAlloc(&device_memory_host, (2 + OUTPUT_BUFFER_SIZE * 3) * sizeof(uint64_t), cudaHostAllocDefault))
     output_counter_host = device_memory_host;
     max_score_host = device_memory_host + 1;
@@ -903,39 +909,7 @@ int main(int argc, char *argv[]) {
 
 
 
-    int cuda_device_count = 0;
-    cudaError_t ce = cudaGetDeviceCount(&cuda_device_count);
-    if (ce != cudaSuccess) {
-        printf("CUDA error (cudaGetDeviceCount): %s\n", cudaGetErrorString(ce));
-        return 1;
-    }
-
-
-    for (int i = 0; i < num_devices; i++) {
-        cudaError_t e = cudaSetDevice(device_ids[i]);
-        if (e != cudaSuccess) {
-            printf("[DEBUG] Exiting early due to cudaSetDevice failure for device %d\n", device_ids[i]);
-            printf("Could not detect device %d\n", device_ids[i]);
-            return 1;
-        }
-
-        // Force CUDA runtime initialization on this device.
-        e = cudaFree(0);
-        if (e != cudaSuccess) {
-            printf("CUDA error (cudaFree(0)) on device %d: %s\n", device_ids[i], cudaGetErrorString(e));
-            return 1;
-        }
-
-        // Copy prefix/suffix constants AFTER a CUDA context exists for this device.
-        e = cudaMemcpyToSymbol(device_prefix, prefix_tmp, 64, 0, cudaMemcpyHostToDevice);
-        if (e != cudaSuccess) { printf("CUDA error (cudaMemcpyToSymbol device_prefix) on device %d: %s\n", device_ids[i], cudaGetErrorString(e)); return 1; }
-        e = cudaMemcpyToSymbol(device_suffix, suffix_tmp, 64, 0, cudaMemcpyHostToDevice);
-        if (e != cudaSuccess) { printf("CUDA error (cudaMemcpyToSymbol device_suffix) on device %d: %s\n", device_ids[i], cudaGetErrorString(e)); return 1; }
-        e = cudaMemcpyToSymbol(device_prefix_len_const, &prefix_len_host, sizeof(int), 0, cudaMemcpyHostToDevice);
-        if (e != cudaSuccess) { printf("CUDA error (cudaMemcpyToSymbol prefix_len) on device %d: %s\n", device_ids[i], cudaGetErrorString(e)); return 1; }
-        e = cudaMemcpyToSymbol(device_suffix_len_const, &suffix_len_host, sizeof(int), 0, cudaMemcpyHostToDevice);
-        if (e != cudaSuccess) { printf("CUDA error (cudaMemcpyToSymbol suffix_len) on device %d: %s\n", device_ids[i], cudaGetErrorString(e)); return 1; }
-    }
+    // NOTE: Do not call CUDA APIs in main() in some container environments; do per-device setup in host_thread.
 
     #define nothex(n) ((n < 48 || n > 57) && (n < 65 || n > 70) && (n < 97 || n > 102))
     _uint256 bytecode_hash;
