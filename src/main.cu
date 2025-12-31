@@ -888,25 +888,14 @@ int main(int argc, char *argv[]) {
         suffix_tmp[63] = '\0';
         suffix_len_host = (int)strlen(suffix_tmp);
     }
-    cudaMemcpyToSymbol(device_prefix, prefix_tmp, 64, 0, cudaMemcpyHostToDevice);
-    cudaMemcpyToSymbol(device_suffix, suffix_tmp, 64, 0, cudaMemcpyHostToDevice);
-    cudaMemcpyToSymbol(device_prefix_len_const, &prefix_len_host, sizeof(int), 0, cudaMemcpyHostToDevice);
-    cudaMemcpyToSymbol(device_suffix_len_const, &suffix_len_host, sizeof(int), 0, cudaMemcpyHostToDevice);
-
     // Save for host-side verification (main thread printing)
     memcpy(host_prefix_str, prefix_tmp, 64);
     memcpy(host_suffix_str, suffix_tmp, 64);
     host_prefix_len = prefix_len_host;
     host_suffix_len = suffix_len_host;
 
-    // Debug verify lengths copied to device
-    int prefix_len_dev = -1;
-    int suffix_len_dev = -1;
-    cudaMemcpyFromSymbol(&prefix_len_dev, device_prefix_len_const, sizeof(int), 0, cudaMemcpyDeviceToHost);
-    cudaMemcpyFromSymbol(&suffix_len_dev, device_suffix_len_const, sizeof(int), 0, cudaMemcpyDeviceToHost);
-
     // Debug print the chosen score_method after all logic is finalized
-    printf("[DEBUG] Score method selected: %d (prefix_len=%d/%d, suffix_len=%d/%d)\n", score_method, prefix_len_host, prefix_len_dev, suffix_len_host, suffix_len_dev);
+    printf("[DEBUG] Score method selected: %d (prefix_len=%d, suffix_len=%d)\n", score_method, prefix_len_host, suffix_len_host);
     if (score_method == 2 && prefix_len_host == 0 && suffix_len_host == 0) {
         printf("ERROR: prefix/suffix scoring selected but both lengths are zero. Please set --prefix/--suffix correctly.\n");
         return 1;
@@ -921,6 +910,12 @@ int main(int argc, char *argv[]) {
             printf("Could not detect device %d\n", device_ids[i]);
             return 1;
         }
+
+        // Copy prefix/suffix constants AFTER a CUDA context exists for this device.
+        cudaMemcpyToSymbol(device_prefix, prefix_tmp, 64, 0, cudaMemcpyHostToDevice);
+        cudaMemcpyToSymbol(device_suffix, suffix_tmp, 64, 0, cudaMemcpyHostToDevice);
+        cudaMemcpyToSymbol(device_prefix_len_const, &prefix_len_host, sizeof(int), 0, cudaMemcpyHostToDevice);
+        cudaMemcpyToSymbol(device_suffix_len_const, &suffix_len_host, sizeof(int), 0, cudaMemcpyHostToDevice);
     }
 
     #define nothex(n) ((n < 48 || n > 57) && (n < 65 || n > 70) && (n < 97 || n > 102))
