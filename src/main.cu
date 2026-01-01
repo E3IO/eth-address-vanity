@@ -411,7 +411,6 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
     if (mode == 0 || mode == 1) {
         gpu_assert(cudaMalloc(&block_offsets, GRID_SIZE * sizeof(CurvePoint)))
         gpu_assert(cudaMalloc(&offsets, (uint64_t)GRID_SIZE * BLOCK_SIZE * sizeof(CurvePoint)))
-        thread_offsets_host = new CurvePoint[BLOCK_SIZE];
         gpu_assert(cudaHostAlloc(&thread_offsets_host, BLOCK_SIZE * sizeof(CurvePoint), cudaHostAllocWriteCombined))
     }
 
