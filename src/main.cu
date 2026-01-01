@@ -224,16 +224,6 @@ __device__ void handle_output(int score_method, Address a, uint64_t key, bool in
         int prefix_len = device_prefix_len_const;
         int suffix_len = device_suffix_len_const;
         score = score_prefix_suffix(a, device_prefix, prefix_len, device_suffix, suffix_len);
-        // Only push if score > 0
-        if (score > 0) {
-            uint32_t idx = atomic_add_bounded_u64(&device_memory[0], OUTPUT_BUFFER_SIZE);
-            if (idx < OUTPUT_BUFFER_SIZE) {
-                device_memory[2 + idx] = key;
-                device_memory[OUTPUT_BUFFER_SIZE + 2 + idx] = score;
-                device_memory[OUTPUT_BUFFER_SIZE * 2 + 2 + idx] = inv;
-            }
-        }
-        return;
     }
 
     if (score >= device_memory[1]) {
@@ -257,15 +247,6 @@ __device__ void handle_output2(int score_method, Address a, uint64_t key) {
         int prefix_len = device_prefix_len_const;
         int suffix_len = device_suffix_len_const;
         score = score_prefix_suffix(a, device_prefix, prefix_len, device_suffix, suffix_len);
-        // Only push if score > 0
-        if (score > 0) {
-            uint32_t idx = atomic_add_bounded_u64(&device_memory[0], OUTPUT_BUFFER_SIZE);
-            if (idx < OUTPUT_BUFFER_SIZE) {
-                device_memory[2 + idx] = key;
-                device_memory[OUTPUT_BUFFER_SIZE + 2 + idx] = score;
-            }
-        }
-        return;
     }
 
     if (score >= device_memory[1]) {
