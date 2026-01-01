@@ -801,6 +801,7 @@ int main(int argc, char *argv[]) {
     char* input_suffix = 0;
     char* input_pubkey = 0;
     char* input_offset_start_hex = 0;
+    bool offset_start_random = false;
     uint64_t offset_start = 0;
 
     int num_devices = 0;
@@ -860,6 +861,9 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--offset-start-hex") == 0 || strcmp(argv[i], "-osh") == 0) {
             input_offset_start_hex = argv[i + 1];
             i += 2;
+        } else if (strcmp(argv[i], "--offset-start-random") == 0 || strcmp(argv[i], "-osr") == 0) {
+            offset_start_random = true;
+            i += 1;
         } else {
             i++;
         }
@@ -898,7 +902,14 @@ int main(int argc, char *argv[]) {
     }
 
     _uint256 offset_start_scalar = u64_to_uint256(offset_start);
-    if (input_offset_start_hex) {
+    if (offset_start_random) {
+        _uint256 max = cpu_sub_256(N, u64_to_uint256(1));
+        int status = generate_secure_random_key(offset_start_scalar, max, 256);
+        if (status) {
+            printf("随机 offset-start 生成失败：%d\n", status);
+            return 1;
+        }
+    } else if (input_offset_start_hex) {
         if (!parse_hex_to_uint256_padded(input_offset_start_hex, offset_start_scalar)) {
             printf("无效 offset-start-hex：需要 0x 开头或 1..64 位 hex（256bit，左侧自动补零）。\n");
             return 1;
