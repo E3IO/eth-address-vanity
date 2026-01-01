@@ -32,6 +32,7 @@
 #include <vector>
 #include <cstdlib>
 #include <unordered_set>
+#include <atomic>
 #include <ctype.h>
 #include <stdio.h>
 #include <string.h>
@@ -274,6 +275,8 @@ uint32_t GRID_SIZE = 1U << 15;
 bool global_pubkey_mode = false;
 CurvePoint global_base_pubkey = G;
 bool global_print_each = false;
+bool global_stop_after_found = false;
+std::atomic<bool> global_stop(false);
 
 struct Message {
     uint64_t time;
@@ -494,6 +497,9 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
         double elapsed;
 
         while (true) {
+            if (global_stop.load()) {
+                return;
+            }
             if (!first_iteration) {
                 if (mode == 0) {
                     gpu_address_work<<<GRID_SIZE, BLOCK_SIZE, 0, streams[0]>>>(score_method, offsets);
@@ -549,6 +555,39 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
                     output_count = OUTPUT_BUFFER_SIZE;
                 }
                 if (output_count != 0) {
+                    if (global_stop_after_found) {
+                        for (uint64_t i = 0; i < output_count; i++) {
+                            if (output_buffer2_host[i] < max_score_host[0]) { continue; }
+                            if (pubkey_mode && output_buffer3_host[i]) { continue; }
+
+                            uint64_t k_offset = output_buffer_host[i];
+                            _uint256 k;
+                            if (pubkey_mode) {
+                                if (output_buffer3_host[i]) {
+                                    continue;
+                                }
+                                _uint256 inner = cpu_add_256(previous_random_key, u64_to_uint256(k_offset));
+                                k = cpu_add_256(offset_start_scalar, inner);
+                            } else {
+                                k = cpu_add_256(previous_random_key, cpu_add_256(_uint256{0, 0, 0, 0, 0, 0, 0, THREAD_WORK}, _uint256{0, 0, 0, 0, 0, 0, (uint32_t)(k_offset >> 32), (uint32_t)(k_offset & 0xFFFFFFFF)}));
+                                if (output_buffer3_host[i]) {
+                                    k = cpu_sub_256(N, k);
+                                }
+                            }
+
+                            _uint256* results = new _uint256[1];
+                            int* scores = new int[1];
+                            results[0] = k;
+                            scores[0] = (int)output_buffer2_host[i];
+
+                            message_queue_mutex.lock();
+                            message_queue.push(Message{milliseconds(), 0, device_index, cudaSuccess, speed, 1, results, scores});
+                            message_queue_mutex.unlock();
+                            message_queue_cv.notify_one();
+                            global_stop.store(true);
+                            return;
+                        }
+                    }
                     int valid_results = 0;
 
                     for (uint64_t i = 0; i < output_count; i++) {
@@ -830,6 +869,7 @@ int main(int argc, char *argv[]) {
     char* input_offset_start_hex = 0;
     bool offset_start_random = false;
     bool print_each = false;
+    bool stop_after_found = false;
     uint64_t offset_start = 0;
 
     int num_devices = 0;
@@ -895,6 +935,9 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--print-each") == 0) {
             print_each = true;
             i += 1;
+        } else if (strcmp(argv[i], "--stop-after-found") == 0) {
+            stop_after_found = true;
+            i += 1;
         } else {
             i++;
         }
@@ -933,6 +976,7 @@ int main(int argc, char *argv[]) {
     }
 
     global_print_each = print_each;
+    global_stop_after_found = stop_after_found;
 
     _uint256 offset_start_scalar = u64_to_uint256(offset_start);
     if (offset_start_random) {
@@ -1169,24 +1213,29 @@ int main(int argc, char *argv[]) {
                         _uint256 k = m.results[i];
                         int score = m.scores[i];
                         Address a = addresses[i];
-                        uint64_t time = (m.time - global_start_time) / 1000;
+                        uint64_t time_ms = (m.time - global_start_time);
+                        uint64_t time = (global_print_each || global_stop_after_found) ? time_ms : (time_ms / 1000);
 
                         if (mode == 0) {
                             if (pubkey_mode) {
                                 if (!host_match_prefix_suffix(a)) {
                                     continue;
                                 }
-                                printf("Elapsed: %06u Score: %02u Offset: 0x%08x%08x%08x%08x%08x%08x%08x%08x Address: 0x%08x%08x%08x%08x%08x\n", (uint32_t)time, score, k.a, k.b, k.c, k.d, k.e, k.f, k.g, k.h, a.a, a.b, a.c, a.d, a.e);
+                                printf("Elapsed: %06llu Score: %02u Offset: 0x%08x%08x%08x%08x%08x%08x%08x%08x Address: 0x%08x%08x%08x%08x%08x\n", (unsigned long long)time, score, k.a, k.b, k.c, k.d, k.e, k.f, k.g, k.h, a.a, a.b, a.c, a.d, a.e);
                             } else {
-                                printf("Elapsed: %06u Score: %02u Private Key: 0x%08x%08x%08x%08x%08x%08x%08x%08x Address: 0x%08x%08x%08x%08x%08x\n", (uint32_t)time, score, k.a, k.b, k.c, k.d, k.e, k.f, k.g, k.h, a.a, a.b, a.c, a.d, a.e);
+                                printf("Elapsed: %06llu Score: %02u Private Key: 0x%08x%08x%08x%08x%08x%08x%08x%08x Address: 0x%08x%08x%08x%08x%08x\n", (unsigned long long)time, score, k.a, k.b, k.c, k.d, k.e, k.f, k.g, k.h, a.a, a.b, a.c, a.d, a.e);
                             }
                         } else if (mode == 1) {
-                            printf("Elapsed: %06u Score: %02u Private Key: 0x%08x%08x%08x%08x%08x%08x%08x%08x Address: 0x%08x%08x%08x%08x%08x\n", (uint32_t)time, score, k.a, k.b, k.c, k.d, k.e, k.f, k.g, k.h, a.a, a.b, a.c, a.d, a.e);
+                            printf("Elapsed: %06llu Score: %02u Private Key: 0x%08x%08x%08x%08x%08x%08x%08x%08x Address: 0x%08x%08x%08x%08x%08x\n", (unsigned long long)time, score, k.a, k.b, k.c, k.d, k.e, k.f, k.g, k.h, a.a, a.b, a.c, a.d, a.e);
                         } else if (mode == 2 || mode == 3) {
-                            printf("Elapsed: %06u Score: %02u Salt: 0x%08x%08x%08x%08x%08x%08x%08x%08x Address: 0x%08x%08x%08x%08x%08x\n", (uint32_t)time, score, k.a, k.b, k.c, k.d, k.e, k.f, k.g, k.h, a.a, a.b, a.c, a.d, a.e);
+                            printf("Elapsed: %06llu Score: %02u Salt: 0x%08x%08x%08x%08x%08x%08x%08x%08x Address: 0x%08x%08x%08x%08x%08x\n", (unsigned long long)time, score, k.a, k.b, k.c, k.d, k.e, k.f, k.g, k.h, a.a, a.b, a.c, a.d, a.e);
                         } else {
                             printf("Final mode%d", mode);
                         }
+                    }
+
+                    if (global_stop_after_found && m.results_count != 0) {
+                        return 0;
                     }
 
                     delete[] addresses;
