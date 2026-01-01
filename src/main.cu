@@ -273,6 +273,7 @@ std::mutex global_max_score_mutex;
 uint32_t GRID_SIZE = 1U << 15;
 bool global_pubkey_mode = false;
 CurvePoint global_base_pubkey = G;
+bool global_print_each = false;
 
 struct Message {
     uint64_t time;
@@ -557,50 +558,81 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
                     }
 
                     if (valid_results > 0) {
-                        _uint256* results = new _uint256[valid_results];
-                        int* scores = new int[valid_results];
-                        valid_results = 0;
+                        if (global_print_each) {
+                            for (uint64_t i = 0; i < output_count; i++) {
+                                if (output_buffer2_host[i] < max_score_host[0]) { continue; }
 
-                        for (uint64_t i = 0; i < output_count; i++) {
-                            if (output_buffer2_host[i] < max_score_host[0]) { continue; }
+                                uint64_t k_offset = output_buffer_host[i];
+                                _uint256 k;
+                                if (pubkey_mode) {
+                                    if (output_buffer3_host[i]) {
+                                        continue;
+                                    }
+                                    _uint256 inner = cpu_add_256(previous_random_key, u64_to_uint256(k_offset));
+                                    k = cpu_add_256(offset_start_scalar, inner);
+                                } else {
+                                    k = cpu_add_256(previous_random_key, cpu_add_256(_uint256{0, 0, 0, 0, 0, 0, 0, THREAD_WORK}, _uint256{0, 0, 0, 0, 0, 0, (uint32_t)(k_offset >> 32), (uint32_t)(k_offset & 0xFFFFFFFF)}));
+                                    if (output_buffer3_host[i]) {
+                                        k = cpu_sub_256(N, k);
+                                    }
+                                }
 
-                            uint64_t k_offset = output_buffer_host[i];
-                            _uint256 k;
-                            if (pubkey_mode) {
-                                // Pubkey offset mode (Option A): only output positive offsets.
-                                // Drop inverted results instead of mapping to N-k.
-                                if (output_buffer3_host[i]) {
-                                    continue;
-                                }
-                                // Pubkey mode: k_offset already encodes the per-thread/per-addend index.
-                                // Report scalar offset relative to base_pubkey:
-                                // offset = offset_start + previous_random_key + k_offset
-                                _uint256 inner = cpu_add_256(previous_random_key, u64_to_uint256(k_offset));
-                                k = cpu_add_256(offset_start_scalar, inner);
-                            } else {
-                                k = cpu_add_256(previous_random_key, cpu_add_256(_uint256{0, 0, 0, 0, 0, 0, 0, THREAD_WORK}, _uint256{0, 0, 0, 0, 0, 0, (uint32_t)(k_offset >> 32), (uint32_t)(k_offset & 0xFFFFFFFF)}));
-                                if (output_buffer3_host[i]) {
-                                    k = cpu_sub_256(N, k);
-                                }
+                                _uint256* results = new _uint256[1];
+                                int* scores = new int[1];
+                                results[0] = k;
+                                scores[0] = (int)output_buffer2_host[i];
+
+                                message_queue_mutex.lock();
+                                message_queue.push(Message{milliseconds(), 0, device_index, cudaSuccess, speed, 1, results, scores});
+                                message_queue_mutex.unlock();
+                                message_queue_cv.notify_one();
                             }
-                
-                            int idx = valid_results++;
-                            results[idx] = k;
-                            scores[idx] = output_buffer2_host[i];
-                        }
 
-                        if (valid_results > 0) {
-                            message_queue_mutex.lock();
-                            message_queue.push(Message{end_time, 0, device_index, cudaSuccess, speed, valid_results, results, scores});
-                            message_queue_mutex.unlock();
-                            message_queue_cv.notify_one();
-                        } else {
-                            delete[] results;
-                            delete[] scores;
                             message_queue_mutex.lock();
                             message_queue.push(Message{end_time, 0, device_index, cudaSuccess, speed, 0});
                             message_queue_mutex.unlock();
                             message_queue_cv.notify_one();
+                        } else {
+                            _uint256* results = new _uint256[valid_results];
+                            int* scores = new int[valid_results];
+                            valid_results = 0;
+
+                            for (uint64_t i = 0; i < output_count; i++) {
+                                if (output_buffer2_host[i] < max_score_host[0]) { continue; }
+
+                                uint64_t k_offset = output_buffer_host[i];
+                                _uint256 k;
+                                if (pubkey_mode) {
+                                    if (output_buffer3_host[i]) {
+                                        continue;
+                                    }
+                                    _uint256 inner = cpu_add_256(previous_random_key, u64_to_uint256(k_offset));
+                                    k = cpu_add_256(offset_start_scalar, inner);
+                                } else {
+                                    k = cpu_add_256(previous_random_key, cpu_add_256(_uint256{0, 0, 0, 0, 0, 0, 0, THREAD_WORK}, _uint256{0, 0, 0, 0, 0, 0, (uint32_t)(k_offset >> 32), (uint32_t)(k_offset & 0xFFFFFFFF)}));
+                                    if (output_buffer3_host[i]) {
+                                        k = cpu_sub_256(N, k);
+                                    }
+                                }
+                    
+                                int idx = valid_results++;
+                                results[idx] = k;
+                                scores[idx] = output_buffer2_host[i];
+                            }
+
+                            if (valid_results > 0) {
+                                message_queue_mutex.lock();
+                                message_queue.push(Message{end_time, 0, device_index, cudaSuccess, speed, valid_results, results, scores});
+                                message_queue_mutex.unlock();
+                                message_queue_cv.notify_one();
+                            } else {
+                                delete[] results;
+                                delete[] scores;
+                                message_queue_mutex.lock();
+                                message_queue.push(Message{end_time, 0, device_index, cudaSuccess, speed, 0});
+                                message_queue_mutex.unlock();
+                                message_queue_cv.notify_one();
+                            }
                         }
                     } else {
                         message_queue_mutex.lock();
@@ -797,6 +829,7 @@ int main(int argc, char *argv[]) {
     char* input_pubkey = 0;
     char* input_offset_start_hex = 0;
     bool offset_start_random = false;
+    bool print_each = false;
     uint64_t offset_start = 0;
 
     int num_devices = 0;
@@ -859,6 +892,9 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--offset-start-random") == 0 || strcmp(argv[i], "-osr") == 0) {
             offset_start_random = true;
             i += 1;
+        } else if (strcmp(argv[i], "--print-each") == 0) {
+            print_each = true;
+            i += 1;
         } else {
             i++;
         }
@@ -895,6 +931,8 @@ int main(int argc, char *argv[]) {
             return 1;
         }
     }
+
+    global_print_each = print_each;
 
     _uint256 offset_start_scalar = u64_to_uint256(offset_start);
     if (offset_start_random) {
