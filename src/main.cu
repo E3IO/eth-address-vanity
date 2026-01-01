@@ -76,6 +76,23 @@ bool host_match_prefix_suffix(Address a) {
     return true;
 }
 
+bool parse_hex_to_uint256_padded(const char* hex, _uint256& out) {
+    // Accept 1..64 hex chars (optionally 0x prefixed), left-pad with zeros to 64.
+    int len = strlen(hex);
+    const char* p = hex;
+    if (len >= 2 && p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) {
+        p += 2;
+        len -= 2;
+    }
+    if (len < 1 || len > 64) return false;
+    char buf[65];
+    int pad = 64 - len;
+    for (int i = 0; i < pad; i++) buf[i] = '0';
+    memcpy(buf + pad, p, len);
+    buf[64] = '\0';
+    return parse_hex_to_uint256(buf, out);
+}
+
 __constant__ CurvePoint thread_offsets[BLOCK_SIZE];
 __constant__ CurvePoint addends[THREAD_WORK - 1];
 __device__ uint64_t device_memory[2 + OUTPUT_BUFFER_SIZE * 3];
@@ -846,8 +863,8 @@ int main(int argc, char *argv[]) {
 
     _uint256 offset_start_scalar = u64_to_uint256(offset_start);
     if (input_offset_start_hex) {
-        if (!parse_hex_to_uint256(input_offset_start_hex, offset_start_scalar)) {
-            printf("无效 offset-start-hex：需要 0x 开头或纯 64 位 hex（256bit）。\n");
+        if (!parse_hex_to_uint256_padded(input_offset_start_hex, offset_start_scalar)) {
+            printf("无效 offset-start-hex：需要 0x 开头或 1..64 位 hex（256bit，左侧自动补零）。\n");
             return 1;
         }
     }
