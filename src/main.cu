@@ -53,6 +53,8 @@ char host_suffix_str[64] = {0};
 int host_prefix_len = 0;
 int host_suffix_len = 0;
 
+bool parse_hex_to_uint256(const char* hex, _uint256& out);
+
 bool host_match_prefix_suffix(Address a) {
     char hex[41];
     uint32_t words[5] = {a.a, a.b, a.c, a.d, a.e};
