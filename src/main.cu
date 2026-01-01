@@ -147,6 +147,22 @@ __device__ int score_leading_zeros(Address a) {
     #define atomicAdd_ul(a, b) atomicAdd(a, b)
 #endif
 
+__device__ __forceinline__ uint32_t atomic_add_bounded_u64(uint64_t* addr, uint32_t limit) {
+    // Saturating increment: returns previous value if < limit, otherwise returns limit.
+    unsigned long long* p = (unsigned long long*)addr;
+    unsigned long long old = *p;
+    while (true) {
+        if (old >= (unsigned long long)limit) {
+            return limit;
+        }
+        unsigned long long assumed = old;
+        old = atomicCAS(p, assumed, assumed + 1ULL);
+        if (old == assumed) {
+            return (uint32_t)assumed;
+        }
+    }
+}
+
 __device__ int score_prefix_suffix(Address a, const char* prefix, int prefix_len, const char* suffix, int suffix_len) {
     // DEBUG: print prefix_len and suffix_len when called
     // printf("[DEBUG] score_prefix_suffix called with prefix_len=%d, suffix_len=%d\n", prefix_len, suffix_len);
@@ -210,7 +226,7 @@ __device__ void handle_output(int score_method, Address a, uint64_t key, bool in
         score = score_prefix_suffix(a, device_prefix, prefix_len, device_suffix, suffix_len);
         // Only push if score > 0
         if (score > 0) {
-            uint32_t idx = atomicAdd_ul(&device_memory[0], 1);
+            uint32_t idx = atomic_add_bounded_u64(&device_memory[0], OUTPUT_BUFFER_SIZE);
             if (idx < OUTPUT_BUFFER_SIZE) {
                 device_memory[2 + idx] = key;
                 device_memory[OUTPUT_BUFFER_SIZE + 2 + idx] = score;
@@ -223,7 +239,7 @@ __device__ void handle_output(int score_method, Address a, uint64_t key, bool in
     if (score >= device_memory[1]) {
         atomicMax_ul(&device_memory[1], score);
         if (score >= device_memory[1]) {
-            uint32_t idx = atomicAdd_ul(&device_memory[0], 1);
+            uint32_t idx = atomic_add_bounded_u64(&device_memory[0], OUTPUT_BUFFER_SIZE);
             if (idx < OUTPUT_BUFFER_SIZE) {
                 device_memory[2 + idx] = key;
                 device_memory[OUTPUT_BUFFER_SIZE + 2 + idx] = score;
@@ -243,7 +259,7 @@ __device__ void handle_output2(int score_method, Address a, uint64_t key) {
         score = score_prefix_suffix(a, device_prefix, prefix_len, device_suffix, suffix_len);
         // Only push if score > 0
         if (score > 0) {
-            uint32_t idx = atomicAdd_ul(&device_memory[0], 1);
+            uint32_t idx = atomic_add_bounded_u64(&device_memory[0], OUTPUT_BUFFER_SIZE);
             if (idx < OUTPUT_BUFFER_SIZE) {
                 device_memory[2 + idx] = key;
                 device_memory[OUTPUT_BUFFER_SIZE + 2 + idx] = score;
@@ -255,7 +271,7 @@ __device__ void handle_output2(int score_method, Address a, uint64_t key) {
     if (score >= device_memory[1]) {
         atomicMax_ul(&device_memory[1], score);
         if (score >= device_memory[1]) {
-            uint32_t idx = atomicAdd_ul(&device_memory[0], 1);
+            uint32_t idx = atomic_add_bounded_u64(&device_memory[0], OUTPUT_BUFFER_SIZE);
             if (idx < OUTPUT_BUFFER_SIZE) {
                 device_memory[2 + idx] = key;
                 device_memory[OUTPUT_BUFFER_SIZE + 2 + idx] = score;
@@ -542,10 +558,14 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
                 global_max_score_mutex.unlock();
 
                 double speed = GRID_WORK / elapsed / 1000000.0 * 2;
-                if (output_counter_host[0] != 0) {
+                uint64_t output_count = output_counter_host[0];
+                if (output_count > OUTPUT_BUFFER_SIZE) {
+                    output_count = OUTPUT_BUFFER_SIZE;
+                }
+                if (output_count != 0) {
                     int valid_results = 0;
 
-                    for (int i = 0; i < output_counter_host[0]; i++) {
+                    for (uint64_t i = 0; i < output_count; i++) {
                         if (output_buffer2_host[i] < max_score_host[0]) { continue; }
                         valid_results++;
                     }
@@ -555,7 +575,7 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
                         int* scores = new int[valid_results];
                         valid_results = 0;
 
-                        for (int i = 0; i < output_counter_host[0]; i++) {
+                        for (uint64_t i = 0; i < output_count; i++) {
                             if (output_buffer2_host[i] < max_score_host[0]) { continue; }
 
                             uint64_t k_offset = output_buffer_host[i];
@@ -628,10 +648,14 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
             global_max_score_mutex.unlock();
 
             double speed = GRID_WORK / elapsed / 1000000.0;
-            if (output_counter_host[0] != 0) {
+            uint64_t output_count = output_counter_host[0];
+            if (output_count > OUTPUT_BUFFER_SIZE) {
+                output_count = OUTPUT_BUFFER_SIZE;
+            }
+            if (output_count != 0) {
                 int valid_results = 0;
 
-                for (int i = 0; i < output_counter_host[0]; i++) {
+                for (uint64_t i = 0; i < output_count; i++) {
                     if (output_buffer2_host[i] < max_score_host[0]) { continue; }
                     valid_results++;
                 }
@@ -641,7 +665,7 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
                     int* scores = new int[valid_results];
                     valid_results = 0;
 
-                    for (int i = 0; i < output_counter_host[0]; i++) {
+                    for (uint64_t i = 0; i < output_count; i++) {
                         if (output_buffer2_host[i] < max_score_host[0]) { continue; }
 
                         uint64_t k_offset = output_buffer_host[i];
