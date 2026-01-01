@@ -567,6 +567,7 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
 
                     for (uint64_t i = 0; i < output_count; i++) {
                         if (output_buffer2_host[i] < max_score_host[0]) { continue; }
+                        if (pubkey_mode && output_buffer3_host[i]) { continue; }
                         valid_results++;
                     }
 
@@ -581,14 +582,16 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
                             uint64_t k_offset = output_buffer_host[i];
                             _uint256 k;
                             if (pubkey_mode) {
+                                // Pubkey offset mode (Option A): only output positive offsets.
+                                // Drop inverted results instead of mapping to N-k.
+                                if (output_buffer3_host[i]) {
+                                    continue;
+                                }
                                 // Pubkey mode: k_offset already encodes the per-thread/per-addend index.
                                 // Report scalar offset relative to base_pubkey:
                                 // offset = offset_start + previous_random_key + k_offset
                                 _uint256 inner = cpu_add_256(previous_random_key, u64_to_uint256(k_offset));
                                 k = cpu_add_256(offset_start_scalar, inner);
-                                if (output_buffer3_host[i]) {
-                                    k = cpu_sub_256(N, k);
-                                }
                             } else {
                                 k = cpu_add_256(previous_random_key, cpu_add_256(_uint256{0, 0, 0, 0, 0, 0, 0, THREAD_WORK}, _uint256{0, 0, 0, 0, 0, 0, (uint32_t)(k_offset >> 32), (uint32_t)(k_offset & 0xFFFFFFFF)}));
                                 if (output_buffer3_host[i]) {
@@ -601,9 +604,17 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
                             scores[idx] = output_buffer2_host[i];
                         }
 
-                        message_queue_mutex.lock();
-                        message_queue.push(Message{end_time, 0, device_index, cudaSuccess, speed, valid_results, results, scores});
-                        message_queue_mutex.unlock();
+                        if (valid_results > 0) {
+                            message_queue_mutex.lock();
+                            message_queue.push(Message{end_time, 0, device_index, cudaSuccess, speed, valid_results, results, scores});
+                            message_queue_mutex.unlock();
+                        } else {
+                            delete[] results;
+                            delete[] scores;
+                            message_queue_mutex.lock();
+                            message_queue.push(Message{end_time, 0, device_index, cudaSuccess, speed, 0});
+                            message_queue_mutex.unlock();
+                        }
                     } else {
                         message_queue_mutex.lock();
                         message_queue.push(Message{end_time, 0, device_index, cudaSuccess, speed, 0});
