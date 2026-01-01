@@ -1214,21 +1214,38 @@ int main(int argc, char *argv[]) {
                         int score = m.scores[i];
                         Address a = addresses[i];
                         uint64_t time_ms = (m.time - global_start_time);
-                        uint64_t time = (global_print_each || global_stop_after_found) ? time_ms : (time_ms / 1000);
+                        uint64_t time_s = time_ms / 1000;
+                        uint64_t time_ms_part = time_ms % 1000;
 
                         if (mode == 0) {
                             if (pubkey_mode) {
                                 if (!host_match_prefix_suffix(a)) {
                                     continue;
                                 }
-                                printf("Elapsed: %06llu Score: %02u Offset: 0x%08x%08x%08x%08x%08x%08x%08x%08x Address: 0x%08x%08x%08x%08x%08x\n", (unsigned long long)time, score, k.a, k.b, k.c, k.d, k.e, k.f, k.g, k.h, a.a, a.b, a.c, a.d, a.e);
+                                if (global_print_each || global_stop_after_found) {
+                                    printf("Elapsed: %06llu.%03llu Score: %02u Offset: 0x%08x%08x%08x%08x%08x%08x%08x%08x Address: 0x%08x%08x%08x%08x%08x\n", (unsigned long long)time_s, (unsigned long long)time_ms_part, score, k.a, k.b, k.c, k.d, k.e, k.f, k.g, k.h, a.a, a.b, a.c, a.d, a.e);
+                                } else {
+                                    printf("Elapsed: %06llu Score: %02u Offset: 0x%08x%08x%08x%08x%08x%08x%08x%08x Address: 0x%08x%08x%08x%08x%08x\n", (unsigned long long)time_s, score, k.a, k.b, k.c, k.d, k.e, k.f, k.g, k.h, a.a, a.b, a.c, a.d, a.e);
+                                }
                             } else {
-                                printf("Elapsed: %06llu Score: %02u Private Key: 0x%08x%08x%08x%08x%08x%08x%08x%08x Address: 0x%08x%08x%08x%08x%08x\n", (unsigned long long)time, score, k.a, k.b, k.c, k.d, k.e, k.f, k.g, k.h, a.a, a.b, a.c, a.d, a.e);
+                                if (global_print_each || global_stop_after_found) {
+                                    printf("Elapsed: %06llu.%03llu Score: %02u Private Key: 0x%08x%08x%08x%08x%08x%08x%08x%08x Address: 0x%08x%08x%08x%08x%08x\n", (unsigned long long)time_s, (unsigned long long)time_ms_part, score, k.a, k.b, k.c, k.d, k.e, k.f, k.g, k.h, a.a, a.b, a.c, a.d, a.e);
+                                } else {
+                                    printf("Elapsed: %06llu Score: %02u Private Key: 0x%08x%08x%08x%08x%08x%08x%08x%08x Address: 0x%08x%08x%08x%08x%08x\n", (unsigned long long)time_s, score, k.a, k.b, k.c, k.d, k.e, k.f, k.g, k.h, a.a, a.b, a.c, a.d, a.e);
+                                }
                             }
                         } else if (mode == 1) {
-                            printf("Elapsed: %06llu Score: %02u Private Key: 0x%08x%08x%08x%08x%08x%08x%08x%08x Address: 0x%08x%08x%08x%08x%08x\n", (unsigned long long)time, score, k.a, k.b, k.c, k.d, k.e, k.f, k.g, k.h, a.a, a.b, a.c, a.d, a.e);
+                            if (global_print_each || global_stop_after_found) {
+                                printf("Elapsed: %06llu.%03llu Score: %02u Private Key: 0x%08x%08x%08x%08x%08x%08x%08x%08x Address: 0x%08x%08x%08x%08x%08x\n", (unsigned long long)time_s, (unsigned long long)time_ms_part, score, k.a, k.b, k.c, k.d, k.e, k.f, k.g, k.h, a.a, a.b, a.c, a.d, a.e);
+                            } else {
+                                printf("Elapsed: %06llu Score: %02u Private Key: 0x%08x%08x%08x%08x%08x%08x%08x%08x Address: 0x%08x%08x%08x%08x%08x\n", (unsigned long long)time_s, score, k.a, k.b, k.c, k.d, k.e, k.f, k.g, k.h, a.a, a.b, a.c, a.d, a.e);
+                            }
                         } else if (mode == 2 || mode == 3) {
-                            printf("Elapsed: %06llu Score: %02u Salt: 0x%08x%08x%08x%08x%08x%08x%08x%08x Address: 0x%08x%08x%08x%08x%08x\n", (unsigned long long)time, score, k.a, k.b, k.c, k.d, k.e, k.f, k.g, k.h, a.a, a.b, a.c, a.d, a.e);
+                            if (global_print_each || global_stop_after_found) {
+                                printf("Elapsed: %06llu.%03llu Score: %02u Salt: 0x%08x%08x%08x%08x%08x%08x%08x%08x Address: 0x%08x%08x%08x%08x%08x\n", (unsigned long long)time_s, (unsigned long long)time_ms_part, score, k.a, k.b, k.c, k.d, k.e, k.f, k.g, k.h, a.a, a.b, a.c, a.d, a.e);
+                            } else {
+                                printf("Elapsed: %06llu Score: %02u Salt: 0x%08x%08x%08x%08x%08x%08x%08x%08x Address: 0x%08x%08x%08x%08x%08x\n", (unsigned long long)time_s, score, k.a, k.b, k.c, k.d, k.e, k.f, k.g, k.h, a.a, a.b, a.c, a.d, a.e);
+                            }
                         } else {
                             printf("Final mode%d", mode);
                         }
